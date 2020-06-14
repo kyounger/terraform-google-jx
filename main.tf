@@ -13,11 +13,15 @@ terraform {
 provider "google" {
   project = var.gcp_project
   version = ">= 2.12.0"
+  region  = var.region
+  zone    = var.zone
 }
 
 provider "google-beta" {
   project = var.gcp_project
   version = ">= 2.12.0"
+  region  = var.region
+  zone    = var.zone
 }
 
 provider "random" {
@@ -179,62 +183,37 @@ module "backup" {
 }
 
 // ----------------------------------------------------------------------------
-// Setup ExternalDNS
+// Setup DNS and static ip
 // ----------------------------------------------------------------------------
 module "dns" {
-  source = "./modules/dns"
+  source = "./modules/dns2"
 
   gcp_project         = var.gcp_project
+  zone                = var.zone
+  region              = var.region
   cluster_name        = local.cluster_name
   parent_domain       = var.parent_domain
-  jenkins_x_namespace = module.cluster.jenkins_x_namespace
+  managed_zone_name   = var.managed_zone_name
+
 }
 
 // ----------------------------------------------------------------------------
 // Let's generate jx-requirements.yml 
 // ----------------------------------------------------------------------------
 locals {
-  interpolated_content = templatefile("${path.module}/modules/jx-requirements.yml.tpl", {
-    gcp_project                 = var.gcp_project
-    zone                        = var.cluster_location
-    cluster_name                = local.cluster_name
-    git_owner_requirement_repos = var.git_owner_requirement_repos
-    dev_env_approvers           = var.dev_env_approvers
-    lets_encrypt_production     = var.lets_encrypt_production
-    // Storage buckets
-    log_storage_url        = module.cluster.log_storage_url
-    report_storage_url     = module.cluster.report_storage_url
-    repository_storage_url = module.cluster.repository_storage_url
-    backup_bucket_url      = module.backup.backup_bucket_url
-    // Vault
-    external_vault = local.external_vault
-    vault_bucket   = module.vault.vault_bucket_name
-    vault_key      = module.vault.vault_key
-    vault_keyring  = module.vault.vault_keyring
-    vault_name     = module.vault.vault_name
-    vault_sa       = module.vault.vault_sa
-    vault_url      = var.vault_url
-    // Velero
-    enable_backup    = var.enable_backup
-    velero_sa        = module.backup.velero_sa
-    velero_namespace = module.backup.backup_bucket_url != "" ? var.velero_namespace : ""
-    velero_schedule  = var.velero_schedule
-    velero_ttl       = var.velero_ttl
-    // DNS
-    domain_enabled = var.parent_domain != "" ? true : false
-    parent_domain  = var.parent_domain
-    tls_email      = var.tls_email
-
-    version_stream_ref = var.version_stream_ref
-    version_stream_url = var.version_stream_url
-    webhook            = var.webhook
+  core_env_content = templatefile("${path.module}/modules/core-env.yaml.tpl", {
+    domain                      = module.dns.fqdn
+    ipAddress                   = module.dns.static_ip
+    adminEmail                  = var.tls_email
   })
 
-  split_content   = split("\n", local.interpolated_content)
-  compact_content = compact(local.split_content)
-  content         = join("\n", local.compact_content)
+  content2        = join("\n", compact(split("\n", local.core_env_content)))
 }
 
+resource "local_file" "core-env" {
+  content  = "${local.content2}\n"
+  filename = "${path.cwd}/core-env.yaml"
+}
 // ----------------------------------------------------------------------------
 // Let's make sure `jx boot` can connect to the cluster for local booting 
 // ----------------------------------------------------------------------------
